@@ -489,8 +489,9 @@ impl NIPIndex {
         Ok(())
     }
 
-    /// Upload `self` to IPFS and return the IPFS link as per NIPRemote variant (IPNS is used for
-    /// both `NewIPNS` and `ExistingIPNS`); put `prev_remote` in the `prev_idx_hash` field.
+    /// Upload `self` to IPFS and return the IPFS link as per prev_remote variant (IPNS is used for
+    /// both `NewIPNS` and `ExistingIPNS`, `None` assumes IPFS); put `prev_remote` in the
+    /// `prev_idx_hash` field.
     pub fn ipfs_add(
         &mut self,
         ipfs: &mut IpfsClient,
