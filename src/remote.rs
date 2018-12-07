@@ -23,6 +23,22 @@ pub enum NIPRemoteParseError {
     Other(String),
 }
 
+impl NIPRemote {
+    pub fn is_ipns(&self) -> bool {
+        match self {
+            NIPRemote::NewIPNS | NIPRemote::ExistingIPNS(_) => true,
+            NIPRemote::NewIPFS | NIPRemote::ExistingIPFS(_) => false,
+        }
+    }
+
+    pub fn get_hash(&self) -> Option<String> {
+        match self {
+            NIPRemote::NewIPFS | NIPRemote::NewIPNS => None,
+            NIPRemote::ExistingIPFS(_) | NIPRemote::ExistingIPNS(_) => Some(self.to_string()),
+        }
+    }
+}
+
 impl FromStr for NIPRemote {
     type Err = Error;
     fn from_str(s: &str) -> Result<NIPRemote, Error> {

@@ -489,17 +489,41 @@ impl NIPIndex {
         Ok(())
     }
 
-    /// Upload `self` to IPFS and return the IPFS link.
-    pub fn ipfs_add(&mut self, ipfs: &mut IpfsClient) -> Result<String, Error> {
+    /// Upload `self` to IPFS and return the IPFS link as per NIPRemote variant (IPNS is used for
+    /// both `NewIPNS` and `ExistingIPNS`); put `prev_remote` in the `prev_idx_hash` field.
+    pub fn ipfs_add(
+        &mut self,
+        ipfs: &mut IpfsClient,
+        prev_remote: Option<&NIPRemote>,
+    ) -> Result<NIPRemote, Error> {
         let mut event_loop = Core::new()?;
-        let mut self_buf = gen_nip_header(None)?;
 
+        self.prev_idx_hash = match prev_remote {
+            Some(remote) => match remote {
+                NIPRemote::ExistingIPFS(_) => Some(remote.to_string()),
+                NIPRemote::ExistingIPNS(hash) => Some(ipns_deref(&hash, ipfs)?),
+                NIPRemote::NewIPFS | NIPRemote::NewIPNS => None,
+            },
+            None => None,
+        };
+
+        // Encode
+        let mut self_buf = gen_nip_header(None)?;
         self_buf.extend_from_slice(&serde_cbor::to_vec(self)?);
 
-        let req = ipfs.add(Cursor::new(self_buf));
-        let hash = format!("/ipfs/{}", event_loop.run(req)?.hash);
-        self.prev_idx_hash = Some(hash.clone());
+        // Upload
+        let add_req = ipfs.add(Cursor::new(self_buf));
+        let mut new_hash = format!("/ipfs/{}", event_loop.run(add_req)?.hash);
 
-        Ok(hash)
+        // Publish on IPNS if applicable; prev_remote == None means no IPNS
+        if prev_remote.map(|remote| remote.is_ipns()).unwrap_or(false) {
+            debug!("Previous remote {:?} was IPNS, republishing", prev_remote);
+
+            let publish_req = ipfs.name_publish(&new_hash, true, None, None, None);
+
+            new_hash = format!("/ipns/{}", event_loop.run(publish_req)?.name)
+        }
+
+        Ok(new_hash.parse()?)
     }
 }

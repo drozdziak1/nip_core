@@ -51,9 +51,9 @@ pub fn gen_nip_header(version: Option<u16>) -> Result<Vec<u8>, Error> {
     Ok(ret)
 }
 
-/// Returns the underlying IPFS path from an IPNS record
+/// Returns the underlying IPFS link from an IPNS record
 pub fn ipns_deref(ipns_hash: &str, ipfs: &mut IpfsClient) -> Result<String, Error> {
     let mut event_loop = Core::new()?;
     let req = ipfs.name_resolve(Some(&ipns_hash), true, false);
-    Ok(event_loop.run(req)?.path)
+    Ok(format!("/ipfs/{}", event_loop.run(req)?.path))
 }
