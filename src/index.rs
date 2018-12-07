@@ -47,10 +47,13 @@ impl NIPIndex {
                 let protocol_version = parse_nip_header(&bytes[..NIP_HEADER_LEN])?;
                 debug!("Index protocol version {}", protocol_version);
                 match protocol_version.cmp(&NIP_PROTOCOL_VERSION) {
-                    Ordering::Less => debug!(
-                        "nip index is {} protocol versions behind, migrating...",
-                        NIP_PROTOCOL_VERSION - protocol_version
-                    ),
+                    Ordering::Less => {
+                        debug!(
+                            "nip index is {} protocol versions behind, migrating...",
+                            NIP_PROTOCOL_VERSION - protocol_version
+                        );
+                        bail!("Migrations aren't a thing yet!");
+                    }
                     Ordering::Equal => {}
                     Ordering::Greater => {
                         error!(
