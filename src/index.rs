@@ -85,7 +85,7 @@ impl NIPIndex {
         }
     }
 
-    /// Figure out what git hash `ref_src` points to in `repo` and add it to the index as `ref_dst`.
+    /// Figure out what git hash `ref_src` points to in `repo` and add it to the index as `ref_dst`. If `ref_src` is an empty string, `ref_dst` is deleted from the index (only the ref, the objects aren't touched).
     pub fn push_ref_from_str(
         &mut self,
         ref_src: &str,
@@ -94,6 +94,18 @@ impl NIPIndex {
         repo: &mut Repository,
         ipfs: &mut IpfsClient,
     ) -> Result<(), Error> {
+        // Deleting `ref_dst` was requested
+        if ref_src == "" {
+            debug!("Removing ref {} from index", ref_dst);
+            if self.refs.remove(ref_dst).is_none() {
+                warn!(
+                    "Nothing to delete, ref {} not part of the index ref set",
+                    ref_dst
+                );
+                debug!("Available refs:\n{:#?}", self.refs);
+            }
+            return Ok(());
+        }
         let reference = repo.find_reference(ref_src)?.resolve()?;
 
         // Differentiate between annotated tags and their commit representation
