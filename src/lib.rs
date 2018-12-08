@@ -23,7 +23,7 @@
 //! let mut idx = NIPIndex::from_nip_remote(&NIPRemote::NewIPFS, &mut ipfs)?;
 //!
 //! // Upload the full object tree behind a specified local ref to IPFS
-//! idx.push_ref_from_str("refs/heads/master", "refs/heads/master", &mut repo, &mut ipfs)?;
+//! idx.push_ref_from_str("refs/heads/master", "refs/heads/master", false, &mut repo, &mut ipfs)?;
 //!
 //! // Also upload the brand new index itself
 //! let nip_remote: NIPRemote = idx.ipfs_add(&mut ipfs, None)?;
