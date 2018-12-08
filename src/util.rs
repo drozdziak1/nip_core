@@ -1,4 +1,4 @@
-use super::env_logger;
+//! Utility routines that don't necessarily fit anywhere else.
 
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use env_logger::Builder;

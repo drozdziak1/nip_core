@@ -1,3 +1,4 @@
+//! nip index implementation
 use super::serde_cbor;
 
 use failure::Error;
@@ -17,7 +18,10 @@ use object::{NIPObject, NIPObjectMetadata};
 use remote::NIPRemote;
 use util::{gen_nip_header, ipns_deref, parse_nip_header};
 
-/// The "entrypoint" data structure for a nip instance traversing a repo
+/// The entrypoint data structure for every nip repo.
+///
+/// Every top-level nip IPFS link points at a `NIPIndex`. nip indices store information about all
+/// git objects contained within a given nip repository.
 #[derive(Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct NIPIndex {
     /// All refs this repository knows; a {name -> sha1} mapping
@@ -29,7 +33,7 @@ pub struct NIPIndex {
 }
 
 impl NIPIndex {
-    /// Downlaod from IPFS and instantiate a NIPIndex
+    /// Download from IPFS and instantiate a NIPIndex
     pub fn from_nip_remote(remote: &NIPRemote, ipfs: &mut IpfsClient) -> Result<Self, Error> {
         match remote {
             NIPRemote::ExistingIPFS(ref hash) => {
@@ -81,7 +85,7 @@ impl NIPIndex {
         }
     }
 
-    /// Dereference `ref_src` and add it to the index on IPFS.
+    /// Figure out what git hash `ref_src` points to in `repo` and add it to the index as `ref_dst`.
     pub fn push_ref_from_str(
         &mut self,
         ref_src: &str,
@@ -116,10 +120,9 @@ impl NIPIndex {
         Ok(())
     }
 
-    /// Check an object ID for git object tree nodes missing in the index; return a list of
-    /// object ids that need to be pushed in order to update the remote.
+    /// Get a hash set of `obj`'s children present in `repo` but missing from `self`.
     pub fn enumerate_for_push(
-        &mut self,
+        &self,
         obj: &Object,
         repo: &Repository,
         ipfs: &mut IpfsClient,
@@ -219,7 +222,7 @@ impl NIPIndex {
         }
     }
 
-    /// Take `oids` and upload underlying objects to IPFS
+    /// Take `oids` and upload underlying `repo` git objects to IPFS.
     pub fn push_git_objects(
         &mut self,
         oids: &HashSet<Oid>,
@@ -325,9 +328,9 @@ impl NIPIndex {
         Ok(())
     }
 
-    /// Fetch `git_hash` to `ref_name`
+    /// Fetch `git_hash` from `self` to `repo`'s `ref_name` ref.
     pub fn fetch_to_ref_from_str(
-        &mut self,
+        &self,
         git_hash: &str,
         ref_name: &str,
         repo: &mut Repository,
@@ -367,9 +370,9 @@ impl NIPIndex {
         Ok(())
     }
 
-    /// Query the index for the object tree starting at `oid`, return deduplicated object IDs.
+    /// Get a hash set of `oid`'s children that are present in `self` but missing in `repo`.
     pub fn enumerate_for_fetch(
-        &mut self,
+        &self,
         oid: Oid,
         repo: &mut Repository,
         ipfs: &mut IpfsClient,
@@ -453,9 +456,9 @@ impl NIPIndex {
         Ok(ret)
     }
 
-    /// Instantiate objects under `oids` in the local git repo.
+    /// Download git objects in `oids` from IPFS and instantiate them in `repo`.
     pub fn fetch_nip_objects(
-        &mut self,
+        &self,
         oids: &HashSet<Oid>,
         repo: &mut Repository,
         ipfs: &mut IpfsClient,
@@ -489,9 +492,9 @@ impl NIPIndex {
         Ok(())
     }
 
-    /// Upload `self` to IPFS and return the IPFS link as per prev_remote variant (IPNS is used for
-    /// both `NewIPNS` and `ExistingIPNS`, `None` assumes IPFS); put `prev_remote` in the
-    /// `prev_idx_hash` field.
+    /// Upload `self` to IPFS and return the IPFS/IPNS link. Plain/IPNS link use is determined as
+    /// per `prev_remote` variant (IPNS is used for both `NewIPNS` and `ExistingIPNS`, `None`
+    /// assumes IPFS); `prev_remote` is later put in the `prev_idx_hash` field just before upload.
     pub fn ipfs_add(
         &mut self,
         ipfs: &mut IpfsClient,

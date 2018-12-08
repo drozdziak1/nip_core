@@ -1,3 +1,38 @@
+//! `nip_core` is a library that lets you interact with [nip](https://github.com/drozdziak1/nip)
+//! repositories programmatically.
+//!
+//! ```rust,no_run
+//! extern crate failure;
+//! extern crate git2;
+//! extern crate ipfs_api;
+//! extern crate nip_core;
+//!
+//! use failure::Error;
+//! use git2::Repository;
+//! use ipfs_api::IpfsClient;
+//! use nip_core::{NIPIndex, NIPRemote};
+//!
+//! # fn main() -> Result<(), Error>{
+//! // Open the local repository
+//! let mut repo = Repository::open_from_env()?;
+//!
+//! // Get a handle for IPFS API
+//! let mut ipfs = IpfsClient::default();
+//!
+//! // Instantiate a brand new nip index
+//! let mut idx = NIPIndex::from_nip_remote(&NIPRemote::NewIPFS, &mut ipfs)?;
+//!
+//! // Upload the full object tree behind a specified local ref to IPFS
+//! idx.push_ref_from_str("refs/heads/master", "refs/heads/master", &mut repo, &mut ipfs)?;
+//!
+//! // Also upload the brand new index itself
+//! let nip_remote: NIPRemote = idx.ipfs_add(&mut ipfs, None)?;
+//!
+//! println!("Success! refs/heads/master uploaded to remote {}", nip_remote.to_string());
+//! # Ok(())
+//! # }
+//! ```
+#![deny(missing_docs)]
 #[macro_use]
 extern crate failure;
 #[macro_use]

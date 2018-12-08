@@ -1,3 +1,4 @@
+//! nip remote implementation
 use failure::Error;
 
 use std::{str::FromStr, string::ToString};
@@ -5,15 +6,20 @@ use std::{str::FromStr, string::ToString};
 use constants::IPFS_HASH_LEN;
 
 #[derive(Clone, Debug, PartialEq)]
-/// A representation of a nip remote repository
+/// An enum for describing different nip remote types
 pub enum NIPRemote {
-    ExistingIPFS(String), // Use a supplied existing repo hash
-    ExistingIPNS(String), // Resolve and use an existing IPNS record
-    NewIPFS,              // Create a brand new IPFS-hosted nip repo
-    NewIPNS,              // Update local IPNS record. TODO: Support using a specified IPNS key
+    #[allow(missing_docs)]
+    ExistingIPFS(String),
+    #[allow(missing_docs)]
+    ExistingIPNS(String),
+    /// A placeholder for a remote that doesn't have an index yet
+    NewIPFS,
+    /// Same as `NewIPFS` except for IPNS
+    NewIPNS,
 }
 
 #[derive(Debug, Fail, PartialEq)]
+#[allow(missing_docs)]
 pub enum NIPRemoteParseError {
     #[fail(display = "Got a hash {} chars long, expected {}", _0, _1)]
     InvalidHashLength(usize, usize),
@@ -24,6 +30,7 @@ pub enum NIPRemoteParseError {
 }
 
 impl NIPRemote {
+    #[allow(missing_docs)]
     pub fn is_ipns(&self) -> bool {
         match self {
             NIPRemote::NewIPNS | NIPRemote::ExistingIPNS(_) => true,
@@ -31,6 +38,21 @@ impl NIPRemote {
         }
     }
 
+    /// Return the hash if `self` refers to an `Existing*` variant
+    ///
+    /// # Example
+    /// ```rust
+    /// # extern crate nip_core;
+    /// # use nip_core::NIPRemote;
+    ///
+    /// let mut remote: NIPRemote = "new-ipns".parse().unwrap();
+    /// assert_eq!(remote.get_hash(), None);
+    ///
+    /// let remote_string = "/ipfs/QmdT2sVhj8UicZsGY7x687FgdJPrzR9idGyavi5282CPH3".to_owned();
+    ///
+    /// remote = remote_string.parse().unwrap();
+    /// assert_eq!(remote.get_hash(), Some(remote_string));
+    /// ```
     pub fn get_hash(&self) -> Option<String> {
         match self {
             NIPRemote::NewIPFS | NIPRemote::NewIPNS => None,
