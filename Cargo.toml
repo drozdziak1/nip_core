@@ -1,7 +1,18 @@
 [package]
 name = "nip_core"
+description = "The backing library for the nip git-ipfs helper"
 version = "0.1.0"
 authors = ["Stan Drozd <drozdziak1@gmail.com>"]
+repository = "https://github.com/drozdziak1/nip_core"
+readme = "README.md"
+keywords = ["git", "ipfs", "libgit2", "p2p"]
+categories = []
+license = "BSD-3-Clause"
+license-file = "LICENSE"
+
+[badges]
+travis-ci = { repository = "drozdziak1/nip_core" }
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 byteorder = "1.2"
