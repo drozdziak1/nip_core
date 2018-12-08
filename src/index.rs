@@ -90,6 +90,7 @@ impl NIPIndex {
         &mut self,
         ref_src: &str,
         ref_dst: &str,
+        force: bool,
         repo: &mut Repository,
         ipfs: &mut IpfsClient,
     ) -> Result<(), Error> {
@@ -106,6 +107,28 @@ impl NIPIndex {
             obj.kind(),
             obj.id()
         );
+
+        if force {
+            warn!("This push will be forced");
+        } else {
+            debug!("Checking for work ahead of us...");
+
+            if let Some(dst_git_hash) = self.refs.get(ref_dst) {
+                let missing_objects =
+                    self.enumerate_for_fetch(dst_git_hash.parse()?, repo, ipfs)?;
+
+                if missing_objects.len() > 0 {
+                    error!(
+                        "There's {} objects in {} not present locally. Please fetch first or force-push.",
+                        missing_objects.len(),
+                        ref_dst
+                    );
+
+                    debug!("Missing objects:\n{:#?}", missing_objects);
+                    bail!("fetch first");
+                }
+            }
+        }
 
         let objs_for_push = self.enumerate_for_push(&obj.clone(), repo, ipfs)?;
         debug!(
@@ -374,7 +397,7 @@ impl NIPIndex {
     pub fn enumerate_for_fetch(
         &self,
         oid: Oid,
-        repo: &mut Repository,
+        repo: &Repository,
         ipfs: &mut IpfsClient,
     ) -> Result<HashSet<Oid>, Error> {
         let mut ret = HashSet::new();
