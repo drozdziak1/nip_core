@@ -8,7 +8,6 @@ readme = "README.md"
 keywords = ["git", "ipfs", "libgit2", "p2p"]
 categories = []
 license = "BSD-3-Clause"
-license-file = "LICENSE"
 
 [badges]
 travis-ci = { repository = "drozdziak1/nip_core" }
