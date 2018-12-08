@@ -1,0 +1,7 @@
+language: rust
+script:
+  - cargo build --verbose
+rust:
+  - stable
+  - beta
+  - nightly
