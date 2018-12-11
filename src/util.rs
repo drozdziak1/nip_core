@@ -3,9 +3,10 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use env_logger::Builder;
 use failure::Error;
+use futures::Future;
 use ipfs_api::IpfsClient;
 use log::LevelFilter;
-use tokio_core::reactor::Core;
+use tokio::runtime::Runtime;
 
 use std::env;
 
@@ -53,7 +54,14 @@ pub fn gen_nip_header(version: Option<u16>) -> Result<Vec<u8>, Error> {
 
 /// Returns the underlying IPFS link from an IPNS record
 pub fn ipns_deref(ipns_hash: &str, ipfs: &mut IpfsClient) -> Result<String, Error> {
-    let mut event_loop = Core::new()?;
+    let mut event_loop = Runtime::new()?;
     let req = ipfs.name_resolve(Some(&ipns_hash), true, false);
-    Ok(format!("/ipfs/{}", event_loop.run(req)?.path))
+    let ipfs_hash = event_loop.block_on(req)?;
+
+    event_loop
+        .shutdown_on_idle()
+        .wait()
+        .map_err(|()| format_err!("Could not shutdown the tokio runtime"))?;
+
+    Ok(format!("/ipfs/{}", ipfs_hash.path))
 }

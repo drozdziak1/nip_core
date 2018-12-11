@@ -1,9 +1,9 @@
 //! nip object implementation
 use failure::Error;
-use futures::Stream;
+use futures::{Future, Stream};
 use git2::{Blob, Commit, ObjectType, Odb, OdbObject, Oid, Tag, Tree};
 use ipfs_api::IpfsClient;
-use tokio_core::reactor::Core;
+use tokio::runtime::Runtime;
 
 use std::{collections::BTreeSet, io::Cursor};
 
@@ -28,13 +28,9 @@ pub enum NIPObjectMetadata {
         tree_git_hash: String,
     },
     #[allow(missing_docs)]
-    Tag {
-        target_git_hash: String,
-    },
+    Tag { target_git_hash: String },
     #[allow(missing_docs)]
-    Tree {
-        entry_git_hashes: BTreeSet<String>,
-    },
+    Tree { entry_git_hashes: BTreeSet<String> },
     #[allow(missing_docs)]
     Blob,
 }
@@ -104,11 +100,15 @@ impl NIPObject {
 
     /// Download from IPFS and instantiate a `NIPObject`.
     pub fn ipfs_get(hash: &str, ipfs: &mut IpfsClient) -> Result<Self, Error> {
-        let mut event_loop = Core::new()?;
+        let mut event_loop = Runtime::new()?;
 
         let object_bytes_req = ipfs.cat(hash).concat2();
 
-        let object_bytes: Vec<u8> = event_loop.run(object_bytes_req)?.into_iter().collect();
+        let object_bytes: Vec<u8> = event_loop.block_on(object_bytes_req)?.into_iter().collect();
+        event_loop
+            .shutdown_on_idle()
+            .wait()
+            .map_err(|()| format_err!("Could not shutdown the event loop"))?;
 
         let obj_nip_proto_version = parse_nip_header(&object_bytes)?;
 
@@ -125,34 +125,46 @@ impl NIPObject {
 
     /// Put `self` on IPFS and return the link.
     pub fn ipfs_add(&self, ipfs: &mut IpfsClient) -> Result<String, Error> {
-        let mut event_loop = Core::new()?;
+        let mut event_loop = Runtime::new()?;
         let mut self_buf = gen_nip_header(None)?;
 
         self_buf.extend_from_slice(&serde_cbor::to_vec(self)?);
 
         let req = ipfs.add(Cursor::new(self_buf));
-        let ipfs_hash = format!("/ipfs/{}", event_loop.run(req)?.hash);
+        let ipfs_hash = format!("/ipfs/{}", event_loop.block_on(req)?.hash);
+        event_loop
+            .shutdown_on_idle()
+            .wait()
+            .map_err(|()| format_err!("Could not shutdown the event loop"))?;
 
         Ok(ipfs_hash)
     }
 
     /// Upload `odb_obj` to IPFS and return the link.
     fn upload_odb_obj(odb_obj: &OdbObject, ipfs: &mut IpfsClient) -> Result<String, Error> {
-        let mut event_loop = Core::new()?;
+        let mut event_loop = Runtime::new()?;
 
         let obj_buf = odb_obj.data().to_vec();
 
         let raw_data_req = ipfs.add(Cursor::new(obj_buf));
-
-        Ok(format!("/ipfs/{}", event_loop.run(raw_data_req)?.hash))
+        let ipfs_hash = event_loop.block_on(raw_data_req)?.hash;
+        event_loop
+            .shutdown_on_idle()
+            .wait()
+            .map_err(|()| format_err!("Could not shutdown the event loop"))?;
+        Ok(format!("/ipfs/{}", ipfs_hash))
     }
 
     /// Download `self.raw_data_ipfs_hash` from IPFS and use it to instantiate `self` in `odb`.
     pub fn write_raw_data(&self, odb: &mut Odb, ipfs: &mut IpfsClient) -> Result<Oid, Error> {
-        let mut event_loop = Core::new()?;
+        let mut event_loop = Runtime::new()?;
         let req = ipfs.cat(&self.raw_data_ipfs_hash).concat2();
 
-        let bytes = event_loop.run(req)?;
+        let bytes = event_loop.block_on(req)?;
+        event_loop
+            .shutdown_on_idle()
+            .wait()
+            .map_err(|()| format_err!("Could not shutdown the event loop"))?;
 
         let obj_type = match self.metadata {
             NIPObjectMetadata::Blob => ObjectType::Blob,

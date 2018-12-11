@@ -2,10 +2,10 @@
 use super::serde_cbor;
 
 use failure::Error;
-use futures::Stream;
+use futures::{Future, Stream};
 use git2::{Object, ObjectType, Oid, Repository};
 use ipfs_api::IpfsClient;
-use tokio_core::reactor::Core;
+use tokio::runtime::Runtime;
 
 use std::{
     cmp::Ordering,
@@ -38,10 +38,14 @@ impl NIPIndex {
         match remote {
             NIPRemote::ExistingIPFS(ref hash) => {
                 debug!("Fetching NIPIndex from /ipfs/{}", hash);
-                let mut event_loop = Core::new()?;
+                let mut event_loop = Runtime::new()?;
                 let req = ipfs.cat(hash).concat2();
 
-                let bytes = event_loop.run(req)?;
+                let bytes = event_loop.block_on(req)?;
+                event_loop
+                    .shutdown_on_idle()
+                    .wait()
+                    .map_err(|()| format_err!("Could not shutdown the event loop"))?;
 
                 match String::from_utf8(bytes.to_vec()) {
                     Ok(s) => trace!("Received string:\n{}", s),
@@ -129,12 +133,12 @@ impl NIPIndex {
                 let missing_objects =
                     self.enumerate_for_fetch(dst_git_hash.parse()?, repo, ipfs)?;
 
-                if missing_objects.len() > 0 {
+                if !missing_objects.is_empty() {
                     error!(
                         "There's {} objects in {} not present locally. Please fetch first or force-push.",
                         missing_objects.len(),
                         ref_dst
-                    );
+                        );
 
                     debug!("Missing objects:\n{:#?}", missing_objects);
                     bail!("fetch first");
@@ -535,7 +539,7 @@ impl NIPIndex {
         ipfs: &mut IpfsClient,
         prev_remote: Option<&NIPRemote>,
     ) -> Result<NIPRemote, Error> {
-        let mut event_loop = Core::new()?;
+        let mut event_loop = Runtime::new()?;
 
         self.prev_idx_hash = match prev_remote {
             Some(remote) => match remote {
@@ -552,7 +556,7 @@ impl NIPIndex {
 
         // Upload
         let add_req = ipfs.add(Cursor::new(self_buf));
-        let mut new_hash = format!("/ipfs/{}", event_loop.run(add_req)?.hash);
+        let mut new_hash = format!("/ipfs/{}", event_loop.block_on(add_req)?.hash);
 
         // Publish on IPNS if applicable; prev_remote == None means no IPNS
         if prev_remote.map(|remote| remote.is_ipns()).unwrap_or(false) {
@@ -560,8 +564,12 @@ impl NIPIndex {
 
             let publish_req = ipfs.name_publish(&new_hash, true, None, None, None);
 
-            new_hash = format!("/ipns/{}", event_loop.run(publish_req)?.name)
+            new_hash = format!("/ipns/{}", event_loop.block_on(publish_req)?.name);
         }
+        event_loop
+            .shutdown_on_idle()
+            .wait()
+            .map_err(|()| format_err!("Could not shutdown the event loop"))?;
 
         Ok(new_hash.parse()?)
     }

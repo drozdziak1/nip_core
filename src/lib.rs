@@ -48,7 +48,7 @@ extern crate hyper;
 extern crate ipfs_api;
 extern crate serde;
 extern crate serde_cbor;
-extern crate tokio_core;
+extern crate tokio;
 
 pub mod constants;
 pub mod index;
