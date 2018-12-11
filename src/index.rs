@@ -13,10 +13,12 @@ use std::{
     io::Cursor,
 };
 
-use constants::{NIP_HEADER_LEN, NIP_PROTOCOL_VERSION};
-use object::{NIPObject, NIPObjectMetadata};
-use remote::NIPRemote;
-use util::{gen_nip_header, ipns_deref, parse_nip_header};
+use crate::{
+    constants::{NIP_HEADER_LEN, NIP_PROTOCOL_VERSION},
+    object::{NIPObject, NIPObjectMetadata},
+    remote::NIPRemote,
+    util::{gen_nip_header, ipns_deref, parse_nip_header},
+};
 
 /// The entrypoint data structure for every nip repo.
 ///

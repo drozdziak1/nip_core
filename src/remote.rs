@@ -3,7 +3,7 @@ use failure::Error;
 
 use std::{str::FromStr, string::ToString};
 
-use constants::IPFS_HASH_LEN;
+use crate::constants::IPFS_HASH_LEN;
 
 #[derive(Clone, Debug, PartialEq)]
 /// An enum for describing different nip remote types

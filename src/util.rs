@@ -10,7 +10,7 @@ use tokio::runtime::Runtime;
 
 use std::env;
 
-use constants::{NIP_HEADER_LEN, NIP_MAGIC, NIP_PROTOCOL_VERSION};
+use crate::constants::{NIP_HEADER_LEN, NIP_MAGIC, NIP_PROTOCOL_VERSION};
 
 /// This helper function initializes logging on the supplied level unless RUST_LOG was specified
 pub fn init_logging(default_lvl: LevelFilter) {

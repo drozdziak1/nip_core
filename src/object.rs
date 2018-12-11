@@ -7,8 +7,10 @@ use tokio::runtime::Runtime;
 
 use std::{collections::BTreeSet, io::Cursor};
 
-use constants::{NIP_HEADER_LEN, NIP_PROTOCOL_VERSION};
-use util::{gen_nip_header, parse_nip_header};
+use crate::{
+    constants::{NIP_HEADER_LEN, NIP_PROTOCOL_VERSION},
+    util::{gen_nip_header, parse_nip_header},
+};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 /// A nip representation of a git object
