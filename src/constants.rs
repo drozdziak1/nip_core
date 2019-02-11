@@ -12,7 +12,12 @@ pub static IPFS_HASH_LEN: usize = 46;
 pub static NIP_MAGIC: &[u8] = b"NIPNIP";
 
 /// Current protocol version; must be bumped for every breaking format change
-pub static NIP_PROTOCOL_VERSION: u16 = 1; // Bump on breaking data structure changes
+pub static NIP_PROTOCOL_VERSION: u16 = 2; // Bump on breaking data structure changes
 
 #[allow(missing_docs)]
 pub static NIP_HEADER_LEN: usize = 8;
+
+/// A magic value used to signal that a hash is a submodule tip (obtained by git on its own).
+/// Locally git knows a commit is a submodule tip because it's the only case when a tree entry is a
+/// commit. This relationship however is impossible to express in a NIP index.
+pub static SUBMODULE_TIP_MARKER: &str = "submodule-tip";

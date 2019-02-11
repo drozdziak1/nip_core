@@ -14,7 +14,7 @@ use std::{
 };
 
 use crate::{
-    constants::{NIP_HEADER_LEN, NIP_PROTOCOL_VERSION},
+    constants::{NIP_HEADER_LEN, NIP_PROTOCOL_VERSION, SUBMODULE_TIP_MARKER},
     object::{NIPObject, NIPObjectMetadata},
     remote::NIPRemote,
     util::{gen_nip_header, ipns_deref, parse_nip_header},
@@ -148,31 +148,46 @@ impl NIPIndex {
             }
         }
 
-        let objs_for_push = self.enumerate_for_push(&obj.clone(), repo, ipfs)?;
+        let (objs_for_push, submodules_for_push) =
+            self.enumerate_for_push(&obj.clone(), repo, ipfs)?;
         debug!(
             "Counted {} object(s) for push:\n{:#?}",
             objs_for_push.len(),
             objs_for_push
         );
+        debug!(
+            "Counted {} submodule stub(s) for push:\n{:#?}",
+            submodules_for_push.len(),
+            submodules_for_push
+        );
 
         self.push_git_objects(&objs_for_push, repo, ipfs)?;
+
+        // Add all submodule tips to the index
+        for submod_oid in submodules_for_push {
+            self.objects
+                .insert(submod_oid.to_string(), SUBMODULE_TIP_MARKER.to_owned());
+        }
+
         self.refs
             .insert(ref_dst.to_owned(), format!("{}", obj.id()));
         Ok(())
     }
 
-    /// Get a hash set of `obj`'s children present in `repo` but missing from `self`.
+    /// Get two hash sets: `obj`'s children present in `repo` but missing from `self`, and `obj`'s
+    /// children recognized as submodule tips (ordered respectively).
     pub fn enumerate_for_push(
         &self,
         obj: &Object,
         repo: &Repository,
         ipfs: &mut IpfsClient,
-    ) -> Result<HashSet<Oid>, Error> {
-        let mut ret = HashSet::new();
+    ) -> Result<(HashSet<Oid>, HashSet<Oid>), Error> {
+        let mut ret_for_push = HashSet::new();
+        let mut ret_submodules = HashSet::new();
 
         if self.objects.contains_key(&obj.id().to_string()) {
             trace!("Object {} already in nip index", obj.id());
-            return Ok(ret);
+            return Ok((ret_for_push, ret_submodules));
         }
 
         let obj_type = obj.kind().ok_or_else(|| {
@@ -181,7 +196,7 @@ impl NIPIndex {
             format_err!("{}", msg)
         })?;
 
-        ret.insert(obj.id());
+        ret_for_push.insert(obj.id());
 
         match obj_type {
             ObjectType::Commit => {
@@ -194,10 +209,11 @@ impl NIPIndex {
                 trace!("Commit {}: Handling tree {}", commit.id(), tree_obj.id());
 
                 // Every commit has a tree
-                ret = ret
-                    .union(&self.enumerate_for_push(&tree_obj, repo, ipfs)?)
-                    .cloned()
-                    .collect();
+                let (new_ret_for_push, new_ret_submodules) =
+                    &self.enumerate_for_push(&tree_obj, repo, ipfs)?;
+
+                ret_for_push = ret_for_push.union(new_ret_for_push).cloned().collect();
+                ret_submodules = ret_submodules.union(new_ret_submodules).cloned().collect();
 
                 for parent in commit.parents() {
                     trace!(
@@ -205,13 +221,14 @@ impl NIPIndex {
                         commit.id(),
                         parent.id()
                     );
-                    ret = ret
-                        .union(&self.enumerate_for_push(&parent.into_object(), repo, ipfs)?)
-                        .cloned()
-                        .collect();
+                    let (new_ret_for_push, new_ret_submodules) =
+                        &self.enumerate_for_push(&parent.into_object(), repo, ipfs)?;
+
+                    ret_for_push = ret_for_push.union(new_ret_for_push).cloned().collect();
+                    ret_submodules = ret_submodules.union(new_ret_submodules).cloned().collect();
                 }
 
-                Ok(ret)
+                Ok((ret_for_push, ret_submodules))
             }
             ObjectType::Tree => {
                 let tree = obj
@@ -226,17 +243,24 @@ impl NIPIndex {
                         entry.id(),
                         entry.kind()
                     );
-                    ret = ret
-                        .union(&self.enumerate_for_push(
-                            &repo.find_object(entry.id(), entry.kind())?,
-                            repo,
-                            ipfs,
-                        )?)
-                        .cloned()
-                        .collect();
+
+                    // Weed out submodules (Implicitly known as commit children of tree objects)
+                    if let Some(ObjectType::Commit) = entry.kind() {
+                        debug!("Skipping submodule at {}", entry.id());
+
+                        ret_submodules.insert(entry.id());
+
+                        continue;
+                    }
+
+                    let (new_ret_for_push, new_ret_submodules) =
+                        &self.enumerate_for_push(&entry.to_object(&repo)?, repo, ipfs)?;
+
+                    ret_for_push = ret_for_push.union(new_ret_for_push).cloned().collect();
+                    ret_submodules = ret_submodules.union(new_ret_submodules).cloned().collect();
                 }
 
-                Ok(ret)
+                Ok((ret_for_push, ret_submodules))
             }
             ObjectType::Blob => {
                 let blob = obj
@@ -244,7 +268,7 @@ impl NIPIndex {
                     .ok_or_else(|| format_err!("Could not view {:?} as a blob", obj))?;
                 debug!("Counting blob {:?}", blob);
 
-                Ok(ret)
+                Ok((ret_for_push, ret_submodules))
             }
             ObjectType::Tag => {
                 let tag = obj
@@ -252,24 +276,27 @@ impl NIPIndex {
                     .ok_or_else(|| format_err!("Could not view {:?} as a tag", obj))?;
                 debug!("Counting tag {:?}", tag);
 
-                ret = ret
-                    .union(&self.enumerate_for_push(&tag.target()?, repo, ipfs)?)
-                    .cloned()
-                    .collect();
+                let (new_ret_for_push, new_ret_submodules) =
+                    &self.enumerate_for_push(&tag.target()?, repo, ipfs)?;
 
-                Ok(ret)
+                ret_for_push = ret_for_push.union(new_ret_for_push).cloned().collect();
+                ret_submodules = ret_submodules.union(new_ret_submodules).cloned().collect();
+
+                Ok((ret_for_push, ret_submodules))
             }
             other => bail!("Don't know how to traverse a {}", other),
         }
     }
 
-    /// Take `oids` and upload underlying `repo` git objects to IPFS.
+    /// Take `oids` and upload underlying `repo` git objects to IPFS. for `submodules` the
+    /// `SUBMODULE_TIP_MARKER` is inserted.
     pub fn push_git_objects(
         &mut self,
         oids: &HashSet<Oid>,
         repo: &Repository,
         ipfs: &mut IpfsClient,
     ) -> Result<(), Error> {
+        let oid_count = oids.len();
         for (i, oid) in oids.iter().enumerate() {
             let obj = repo.find_object(*oid, None)?;
             trace!("Current object: {:?} at {}", obj.kind(), obj.id());
@@ -300,7 +327,7 @@ impl NIPIndex {
                     debug!(
                         "[{}/{}] Commit {} uploaded to {}",
                         i + 1,
-                        oids.len(),
+                        oid_count,
                         obj.id(),
                         nip_object_hash
                     );
@@ -319,7 +346,7 @@ impl NIPIndex {
                     debug!(
                         "[{}/{}] Tree {} uploaded to {}",
                         i + 1,
-                        oids.len(),
+                        oid_count,
                         obj.id(),
                         nip_object_hash
                     );
@@ -338,7 +365,7 @@ impl NIPIndex {
                     debug!(
                         "[{}/{}] Blob {} uploaded to {}",
                         i + 1,
-                        oids.len(),
+                        oid_count,
                         obj.id(),
                         nip_object_hash
                     );
@@ -358,7 +385,7 @@ impl NIPIndex {
                     debug!(
                         "[{}/{}] Tag {} uploaded to {}",
                         i + 1,
-                        oids.len(),
+                        oid_count,
                         obj.id(),
                         nip_object_hash
                     );
@@ -434,6 +461,11 @@ impl NIPIndex {
                 format_err!("{}", msg)
             })?
             .clone();
+
+        if nip_obj_ipfs_hash == SUBMODULE_TIP_MARKER {
+            debug!("Ommitting submodule {}", oid.to_string());
+            return Ok(ret);
+        }
 
         // Inserting only makes sense after we knowthat the object is there at all
         ret.insert(oid);
