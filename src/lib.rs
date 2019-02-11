@@ -56,4 +56,7 @@ pub mod object;
 pub mod remote;
 pub mod util;
 
+#[cfg(feature = "migrations")]
+pub mod migrations;
+
 pub use crate::{constants::*, index::*, object::*, remote::*, util::*};

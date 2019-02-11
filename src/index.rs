@@ -20,6 +20,9 @@ use crate::{
     util::{gen_nip_header, ipns_deref, parse_nip_header},
 };
 
+#[cfg(feature = "migrations")]
+use crate::migrations::migrate_index;
+
 /// The entrypoint data structure for every nip repo.
 ///
 /// Every top-level nip IPFS link points at a `NIPIndex`. nip indices store information about all
@@ -55,26 +58,36 @@ impl NIPIndex {
                 }
 
                 let protocol_version = parse_nip_header(&bytes[..NIP_HEADER_LEN])?;
+
                 debug!("Index protocol version {}", protocol_version);
                 match protocol_version.cmp(&NIP_PROTOCOL_VERSION) {
                     Ordering::Less => {
-                        debug!(
-                            "nip index is {} protocol versions behind, migrating...",
-                            NIP_PROTOCOL_VERSION - protocol_version
-                        );
-                        bail!("Migrations aren't a thing yet!");
+                        #[cfg(not(feature = "migrations"))]
+                        {
+                            debug!(
+                                "nip index is {} protocol version(s) behind, please rebuild with \"migrations\" enabled to migrate it",
+                                NIP_PROTOCOL_VERSION - protocol_version
+                                );
+                            bail!("Our nip is too new");
+                        }
+                        #[cfg(feature = "migrations")]
+                        {
+                            debug!(
+                                "nip index is {} protocol version(s) behind, migrating...",
+                                NIP_PROTOCOL_VERSION - protocol_version
+                            );
+                            Ok(migrate_index(&bytes[NIP_HEADER_LEN..], protocol_version)?)
+                        }
                     }
-                    Ordering::Equal => {}
+                    Ordering::Equal => Ok(serde_cbor::from_slice(&bytes[NIP_HEADER_LEN..])?),
                     Ordering::Greater => {
-                        error!(
-                            "nip index is {} protocol versions ahead, please upgrade nip to use it",
+                        debug!(
+                            "nip index is {} protocol version(s) ahead, upgrade nip to use it",
                             protocol_version - NIP_PROTOCOL_VERSION
                         );
                         bail!("Our nip is too old");
                     }
                 }
-                let idx: NIPIndex = serde_cbor::from_slice(&bytes[NIP_HEADER_LEN..])?;
-                Ok(idx)
             }
             NIPRemote::ExistingIPNS(ref hash) => Ok(Self::from_nip_remote(
                 &ipns_deref(hash.as_str(), ipfs)?.parse()?,
