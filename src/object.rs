@@ -15,6 +15,8 @@ use crate::{
 #[derive(Clone, Debug, Deserialize, Serialize)]
 /// A nip representation of a git object
 pub struct NIPObject {
+    /// The git hash of the underlying git object
+    pub git_hash: String,
     /// A link to the raw form of the object
     pub raw_data_ipfs_hash: String,
     /// Object-type-specific metadata
@@ -44,6 +46,7 @@ impl NIPObject {
         let raw_data_ipfs_hash = Self::upload_odb_obj(&odb_obj, ipfs)?;
 
         Ok(Self {
+            git_hash: blob.id().to_string(),
             raw_data_ipfs_hash,
             metadata: NIPObjectMetadata::Blob,
         })
@@ -65,6 +68,7 @@ impl NIPObject {
         let tree_git_hash = format!("{}", commit.tree()?.id());
 
         Ok(Self {
+            git_hash: commit.id().to_string(),
             raw_data_ipfs_hash,
             metadata: NIPObjectMetadata::Commit {
                 parent_git_hashes,
@@ -79,6 +83,7 @@ impl NIPObject {
         let raw_data_ipfs_hash = Self::upload_odb_obj(&odb_obj, ipfs)?;
 
         Ok(Self {
+            git_hash: tag.id().to_string(),
             raw_data_ipfs_hash,
             metadata: NIPObjectMetadata::Tag {
                 target_git_hash: format!("{}", tag.target_id()),
@@ -95,6 +100,7 @@ impl NIPObject {
             tree.iter().map(|entry| format!("{}", entry.id())).collect();
 
         Ok(Self {
+            git_hash: tree.id().to_string(),
             raw_data_ipfs_hash,
             metadata: NIPObjectMetadata::Tree { entry_git_hashes },
         })

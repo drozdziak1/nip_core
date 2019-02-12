@@ -76,7 +76,11 @@ impl NIPIndex {
                                 "nip index is {} protocol version(s) behind, migrating...",
                                 NIP_PROTOCOL_VERSION - protocol_version
                             );
-                            Ok(migrate_index(&bytes[NIP_HEADER_LEN..], protocol_version)?)
+                            Ok(migrate_index(
+                                &bytes[NIP_HEADER_LEN..],
+                                protocol_version,
+                                ipfs,
+                            )?)
                         }
                     }
                     Ordering::Equal => Ok(serde_cbor::from_slice(&bytes[NIP_HEADER_LEN..])?),
