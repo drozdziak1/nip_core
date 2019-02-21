@@ -37,6 +37,26 @@ pub struct NIPIndex {
     pub prev_idx_hash: Option<String>,
 }
 
+#[derive(Debug, Fail)]
+/// Errors related to the `index` module
+pub enum NIPIndexError {
+    /// We attempted to use an object from a newer version of NIP than this one
+    #[fail(display = "NIP version {} does not match current version", _0)]
+    InvalidVersion(u16),
+    /// There's objects in the index not present in the local repo - a pull is needed
+    #[fail(display = "fetch first")]
+    FetchFirst,
+    /// We don't know how to traverse a git object type
+    #[fail(
+        display = "An unknown object type was encountered in the git repo: {}",
+        _0
+    )]
+    UnknownGitType(ObjectType),
+    /// Internal error, probably not the user's fault
+    #[fail(display = "Internal error: {}", _0)]
+    InternalError(String),
+}
+
 impl NIPIndex {
     /// Download from IPFS and instantiate a NIPIndex
     pub fn from_nip_remote(remote: &NIPRemote, ipfs: &mut IpfsClient) -> Result<Self, Error> {
@@ -62,26 +82,25 @@ impl NIPIndex {
                 debug!("Index protocol version {}", protocol_version);
                 match protocol_version.cmp(&NIP_PROTOCOL_VERSION) {
                     Ordering::Less => {
-                        #[cfg(not(feature = "migrations"))]
-                        {
-                            debug!(
+                        debug!(
                                 "nip index is {} protocol version(s) behind, please rebuild with \"migrations\" enabled to migrate it",
                                 NIP_PROTOCOL_VERSION - protocol_version
                                 );
-                            bail!("Our nip is too new");
-                        }
-                        #[cfg(feature = "migrations")]
-                        {
-                            debug!(
-                                "nip index is {} protocol version(s) behind, migrating...",
-                                NIP_PROTOCOL_VERSION - protocol_version
-                            );
-                            Ok(migrate_index(
-                                &bytes[NIP_HEADER_LEN..],
-                                protocol_version,
-                                ipfs,
-                            )?)
-                        }
+                        return Err(NIPIndexError::InvalidVersion(protocol_version).into());
+                        /*
+                         *#[cfg(feature = "migrations")]
+                         *{
+                         *    debug!(
+                         *        "nip index is {} protocol version(s) behind, migrating...",
+                         *        NIP_PROTOCOL_VERSION - protocol_version
+                         *    );
+                         *    Ok(migrate_index(
+                         *        &bytes[NIP_HEADER_LEN..],
+                         *        protocol_version,
+                         *        ipfs,
+                         *    )?)
+                         *}
+                         */
                     }
                     Ordering::Equal => Ok(serde_cbor::from_slice(&bytes[NIP_HEADER_LEN..])?),
                     Ordering::Greater => {
@@ -89,7 +108,7 @@ impl NIPIndex {
                             "nip index is {} protocol version(s) ahead, upgrade nip to use it",
                             protocol_version - NIP_PROTOCOL_VERSION
                         );
-                        bail!("Our nip is too old");
+                        return Err(NIPIndexError::InvalidVersion(protocol_version).into());
                     }
                 }
             }
@@ -160,7 +179,7 @@ impl NIPIndex {
                         );
 
                     debug!("Missing objects:\n{:#?}", missing_objects);
-                    bail!("fetch first");
+                    return Err(NIPIndexError::FetchFirst.into());
                 }
             }
         }
@@ -314,7 +333,13 @@ impl NIPIndex {
 
                 Ok(())
             }
-            other => bail!("Don't know how to traverse a {}", other),
+            other => {
+                return Err(NIPIndexError::InternalError(format!(
+                    "Don't know how to traverse a {}",
+                    other
+                ))
+                .into());
+            }
         }
     }
 
@@ -420,7 +445,13 @@ impl NIPIndex {
                         nip_object_hash
                     );
                 }
-                other => bail!("Don't know how to traverse a {}", other),
+                other => {
+                    return Err(NIPIndexError::InternalError(format!(
+                        "Don't know how to traverse a {}",
+                        other
+                    ))
+                    .into());
+                }
             }
         }
         Ok(())
@@ -461,7 +492,7 @@ impl NIPIndex {
             other_type => {
                 let msg = format!("New tip turned out to be a {} after fetch", other_type);
                 error!("{}", msg);
-                bail!("{}", msg);
+                return Err(NIPIndexError::InternalError(msg).into());
             }
         }
 
@@ -589,7 +620,7 @@ impl NIPIndex {
             if written_oid != oid {
                 let msg = format!("Object tree inconsistency detected: fetched {} from {}, but write result hashes to {}", oid, nip_obj_ipfs_hash, written_oid);
                 error!("{}", msg);
-                bail!("{}", msg);
+                return Err(NIPIndexError::InternalError(msg).into());
             }
             trace!("Fetched object {} to {}", nip_obj_ipfs_hash, written_oid);
         }
