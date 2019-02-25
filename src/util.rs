@@ -3,10 +3,10 @@
 use byteorder::{BigEndian, ReadBytesExt, WriteBytesExt};
 use env_logger::Builder;
 use failure::Error;
-use futures::Future;
+use futures::Stream;
 use ipfs_api::IpfsClient;
 use log::LevelFilter;
-use tokio::runtime::Runtime;
+use tokio::runtime::current_thread;
 
 use std::env;
 
@@ -52,16 +52,17 @@ pub fn gen_nip_header(version: Option<u16>) -> Result<Vec<u8>, Error> {
     Ok(ret)
 }
 
+/// A blocking shortcut to download `hash` from IPFS and return the object's bytes
+pub fn ipfs_cat(hash: &str, ipfs: &mut IpfsClient) -> Result<Vec<u8>, Error> {
+    let req = ipfs.cat(hash).concat2();
+
+    Ok((&current_thread::block_on_all(req)?[..]).to_vec())
+}
+
 /// Returns the underlying IPFS link from an IPNS record
 pub fn ipns_deref(ipns_hash: &str, ipfs: &mut IpfsClient) -> Result<String, Error> {
-    let mut event_loop = Runtime::new()?;
     let req = ipfs.name_resolve(Some(&ipns_hash), true, false);
-    let ipfs_hash = event_loop.block_on(req)?;
-
-    event_loop
-        .shutdown_on_idle()
-        .wait()
-        .map_err(|()| format_err!("Could not shutdown the tokio runtime"))?;
+    let ipfs_hash = current_thread::block_on_all(req)?;
 
     Ok(format!("/ipfs/{}", ipfs_hash.path))
 }

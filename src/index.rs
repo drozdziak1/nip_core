@@ -2,10 +2,9 @@
 use super::serde_cbor;
 
 use failure::Error;
-use futures::{Future, Stream};
 use git2::{Object, ObjectType, Oid, Repository};
 use ipfs_api::IpfsClient;
-use tokio::runtime::Runtime;
+use tokio::runtime::current_thread;
 
 use std::{
     cmp::Ordering,
@@ -15,13 +14,11 @@ use std::{
 
 use crate::{
     constants::{NIP_HEADER_LEN, NIP_PROTOCOL_VERSION, SUBMODULE_TIP_MARKER},
+    error::NIPError,
     object::{NIPObject, NIPObjectMetadata},
     remote::NIPRemote,
-    util::{gen_nip_header, ipns_deref, parse_nip_header},
+    util::{gen_nip_header, ipfs_cat, ipns_deref, parse_nip_header},
 };
-
-#[cfg(feature = "migrations")]
-use crate::migrations::migrate_index;
 
 /// The entrypoint data structure for every nip repo.
 ///
@@ -40,21 +37,9 @@ pub struct NIPIndex {
 #[derive(Debug, Fail)]
 /// Errors related to the `index` module
 pub enum NIPIndexError {
-    /// We attempted to use an object from a newer version of NIP than this one
-    #[fail(display = "NIP version {} does not match current version", _0)]
-    InvalidVersion(u16),
     /// There's objects in the index not present in the local repo - a pull is needed
     #[fail(display = "fetch first")]
     FetchFirst,
-    /// We don't know how to traverse a git object type
-    #[fail(
-        display = "An unknown object type was encountered in the git repo: {}",
-        _0
-    )]
-    UnknownGitType(ObjectType),
-    /// Internal error, probably not the user's fault
-    #[fail(display = "Internal error: {}", _0)]
-    InternalError(String),
 }
 
 impl NIPIndex {
@@ -63,54 +48,9 @@ impl NIPIndex {
         match remote {
             NIPRemote::ExistingIPFS(ref hash) => {
                 debug!("Fetching NIPIndex from /ipfs/{}", hash);
-                let mut event_loop = Runtime::new()?;
-                let req = ipfs.cat(hash).concat2();
+                let bytes = ipfs_cat(hash, ipfs)?;
 
-                let bytes = event_loop.block_on(req)?;
-                event_loop
-                    .shutdown_on_idle()
-                    .wait()
-                    .map_err(|()| format_err!("Could not shutdown the event loop"))?;
-
-                match String::from_utf8(bytes.to_vec()) {
-                    Ok(s) => trace!("Received string:\n{}", s),
-                    Err(_e) => trace!("Received raw bytes:\n{:?}", bytes),
-                }
-
-                let protocol_version = parse_nip_header(&bytes[..NIP_HEADER_LEN])?;
-
-                debug!("Index protocol version {}", protocol_version);
-                match protocol_version.cmp(&NIP_PROTOCOL_VERSION) {
-                    Ordering::Less => {
-                        debug!(
-                                "nip index is {} protocol version(s) behind, please rebuild with \"migrations\" enabled to migrate it",
-                                NIP_PROTOCOL_VERSION - protocol_version
-                                );
-                        return Err(NIPIndexError::InvalidVersion(protocol_version).into());
-                        /*
-                         *#[cfg(feature = "migrations")]
-                         *{
-                         *    debug!(
-                         *        "nip index is {} protocol version(s) behind, migrating...",
-                         *        NIP_PROTOCOL_VERSION - protocol_version
-                         *    );
-                         *    Ok(migrate_index(
-                         *        &bytes[NIP_HEADER_LEN..],
-                         *        protocol_version,
-                         *        ipfs,
-                         *    )?)
-                         *}
-                         */
-                    }
-                    Ordering::Equal => Ok(serde_cbor::from_slice(&bytes[NIP_HEADER_LEN..])?),
-                    Ordering::Greater => {
-                        debug!(
-                            "nip index is {} protocol version(s) ahead, upgrade nip to use it",
-                            protocol_version - NIP_PROTOCOL_VERSION
-                        );
-                        return Err(NIPIndexError::InvalidVersion(protocol_version).into());
-                    }
-                }
+                Ok(Self::from_slice(&bytes[..])?)
             }
             NIPRemote::ExistingIPNS(ref hash) => Ok(Self::from_nip_remote(
                 &ipns_deref(hash.as_str(), ipfs)?.parse()?,
@@ -123,6 +63,30 @@ impl NIPIndex {
                     objects: BTreeMap::new(),
                     prev_idx_hash: None,
                 })
+            }
+        }
+    }
+
+    /// Take raw index bytes and build a `NIPIndex` from it
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, Error> {
+        let protocol_version = parse_nip_header(&bytes[..NIP_HEADER_LEN])?;
+
+        debug!("Index protocol version {}", protocol_version);
+        match protocol_version.cmp(&NIP_PROTOCOL_VERSION) {
+            Ordering::Less => {
+                debug!(
+                                "nip index is {} protocol version(s) behind, please rebuild with \"migrations\" enabled to migrate it",
+                                NIP_PROTOCOL_VERSION - protocol_version
+                                );
+                return Err(NIPError::InvalidVersion(protocol_version).into());
+            }
+            Ordering::Equal => Ok(serde_cbor::from_slice(&bytes[NIP_HEADER_LEN..])?),
+            Ordering::Greater => {
+                debug!(
+                    "nip index is {} protocol version(s) ahead, upgrade nip to use it",
+                    protocol_version - NIP_PROTOCOL_VERSION
+                );
+                return Err(NIPError::InvalidVersion(protocol_version).into());
             }
         }
     }
@@ -334,7 +298,7 @@ impl NIPIndex {
                 Ok(())
             }
             other => {
-                return Err(NIPIndexError::InternalError(format!(
+                return Err(NIPError::InternalError(format!(
                     "Don't know how to traverse a {}",
                     other
                 ))
@@ -446,7 +410,7 @@ impl NIPIndex {
                     );
                 }
                 other => {
-                    return Err(NIPIndexError::InternalError(format!(
+                    return Err(NIPError::InternalError(format!(
                         "Don't know how to traverse a {}",
                         other
                     ))
@@ -492,7 +456,7 @@ impl NIPIndex {
             other_type => {
                 let msg = format!("New tip turned out to be a {} after fetch", other_type);
                 error!("{}", msg);
-                return Err(NIPIndexError::InternalError(msg).into());
+                return Err(NIPError::InternalError(msg).into());
             }
         }
 
@@ -620,7 +584,7 @@ impl NIPIndex {
             if written_oid != oid {
                 let msg = format!("Object tree inconsistency detected: fetched {} from {}, but write result hashes to {}", oid, nip_obj_ipfs_hash, written_oid);
                 error!("{}", msg);
-                return Err(NIPIndexError::InternalError(msg).into());
+                return Err(NIPError::InternalError(msg).into());
             }
             trace!("Fetched object {} to {}", nip_obj_ipfs_hash, written_oid);
         }
@@ -635,8 +599,6 @@ impl NIPIndex {
         ipfs: &mut IpfsClient,
         prev_remote: Option<&NIPRemote>,
     ) -> Result<NIPRemote, Error> {
-        let mut event_loop = Runtime::new()?;
-
         self.prev_idx_hash = match prev_remote {
             Some(remote) => match remote {
                 NIPRemote::ExistingIPFS(_) => Some(remote.to_string()),
@@ -652,7 +614,7 @@ impl NIPIndex {
 
         // Upload
         let add_req = ipfs.add(Cursor::new(self_buf));
-        let mut new_hash = format!("/ipfs/{}", event_loop.block_on(add_req)?.hash);
+        let mut new_hash = format!("/ipfs/{}", current_thread::block_on_all(add_req)?.hash);
 
         // Publish on IPNS if applicable; prev_remote == None means no IPNS
         if prev_remote.map(|remote| remote.is_ipns()).unwrap_or(false) {
@@ -660,12 +622,8 @@ impl NIPIndex {
 
             let publish_req = ipfs.name_publish(&new_hash, true, None, None, None);
 
-            new_hash = format!("/ipns/{}", event_loop.block_on(publish_req)?.name);
+            new_hash = format!("/ipns/{}", current_thread::block_on_all(publish_req)?.name);
         }
-        event_loop
-            .shutdown_on_idle()
-            .wait()
-            .map_err(|()| format_err!("Could not shutdown the event loop"))?;
 
         Ok(new_hash.parse()?)
     }

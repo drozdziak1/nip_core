@@ -1,8 +1,5 @@
 //! v1 nip object implementation
 use failure::Error;
-use futures::{Future, Stream};
-use ipfs_api::IpfsClient;
-use tokio::runtime::Runtime;
 
 use std::collections::BTreeSet;
 
@@ -39,18 +36,8 @@ pub enum NIPObjectV1Metadata {
 
 impl NIPObjectV1 {
     /// Download from IPFS and instantiate a `NIPObjectV1`.
-    pub fn ipfs_get(hash: &str, ipfs: &mut IpfsClient) -> Result<Self, Error> {
-        let mut event_loop = Runtime::new()?;
-
-        let object_bytes_req = ipfs.cat(hash).concat2();
-
-        let object_bytes: Vec<u8> = event_loop.block_on(object_bytes_req)?.into_iter().collect();
-        event_loop
-            .shutdown_on_idle()
-            .wait()
-            .map_err(|()| format_err!("Could not shutdown the event loop"))?;
-
-        let obj_nip_proto_version = parse_nip_header(&object_bytes)?;
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, Error> {
+        let obj_nip_proto_version = parse_nip_header(bytes)?;
 
         if obj_nip_proto_version != 1 {
             bail!(
@@ -59,9 +46,10 @@ impl NIPObjectV1 {
             );
         }
 
-        Ok(serde_cbor::from_slice(&object_bytes[NIP_HEADER_LEN..])?)
+        Ok(serde_cbor::from_slice(&bytes[NIP_HEADER_LEN..])?)
     }
 
+    /// Convert to a V2 object
     pub fn to_v2(self, git_hash: &str) -> NIPObjectV2 {
         NIPObjectV2 {
             git_hash: git_hash.to_owned(),

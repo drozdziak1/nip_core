@@ -51,6 +51,7 @@ extern crate serde_cbor;
 extern crate tokio;
 
 pub mod constants;
+pub mod error;
 pub mod index;
 pub mod object;
 pub mod remote;
@@ -59,4 +60,7 @@ pub mod util;
 #[cfg(feature = "migrations")]
 pub mod migrations;
 
-pub use crate::{constants::*, index::*, object::*, remote::*, util::*};
+pub use crate::{constants::*, error::*, index::*, object::*, remote::*, util::*};
+
+#[cfg(feature = "migrations")]
+pub use crate::migrations::*;
