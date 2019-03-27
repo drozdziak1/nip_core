@@ -1,7 +1,7 @@
 [package]
 name = "nip_core"
 description = "The backing library for the nip git-ipfs helper"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Stan Drozd <drozdziak1@gmail.com>"]
 repository = "https://github.com/drozdziak1/nip_core"
 readme = "README.md"
