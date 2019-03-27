@@ -10,6 +10,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
     io::Cursor,
+    time::Instant,
 };
 
 use crate::{
@@ -75,9 +76,9 @@ impl NIPIndex {
         match protocol_version.cmp(&NIP_PROTOCOL_VERSION) {
             Ordering::Less => {
                 debug!(
-                                "nip index is {} protocol version(s) behind, please rebuild with \"migrations\" enabled to migrate it",
-                                NIP_PROTOCOL_VERSION - protocol_version
-                                );
+                    "nip index is {} protocol version(s) behind, please rebuild with \"migrations\" enabled to migrate it",
+                    NIP_PROTOCOL_VERSION - protocol_version
+                    );
                 return Err(NIPError::InvalidVersion(protocol_version).into());
             }
             Ordering::Equal => Ok(serde_cbor::from_slice(&bytes[NIP_HEADER_LEN..])?),
@@ -91,7 +92,9 @@ impl NIPIndex {
         }
     }
 
-    /// Figure out what git hash `ref_src` points to in `repo` and add it to the index as `ref_dst`. If `ref_src` is an empty string, `ref_dst` is deleted from the index (only the ref, the objects aren't touched).
+    /// Figure out what git hash `ref_src` points to in `repo` and add it to the index as
+    /// `ref_dst`. If `ref_src` is an empty string, `ref_dst` is deleted from the index (only the
+    /// ref, the objects aren't touched).
     pub fn push_ref_from_str(
         &mut self,
         ref_src: &str,
@@ -151,13 +154,21 @@ impl NIPIndex {
         let mut objs_for_push = HashSet::new();
         let mut submodules_for_push = HashSet::new();
 
+        let start = Instant::now();
         self.enumerate_for_push(
             &obj.clone(),
             &mut objs_for_push,
             &mut submodules_for_push,
             repo,
-            ipfs,
         )?;
+        let dur = Instant::now().duration_since(start);
+
+        debug!(
+            "Counted objects in {}.{}s",
+            dur.as_secs(),
+            dur.subsec_micros()
+        );
+
         debug!(
             "Counted {} object(s) for push:\n{:#?}",
             objs_for_push.len(),
@@ -182,129 +193,111 @@ impl NIPIndex {
         Ok(())
     }
 
-    /// Recursively fill two hash sets: `obj`'s children present in `repo` but missing from `self`
-    /// (`for_push_state`), and `obj`'s children recognized as submodule tips. (`submodule_state`).
+    /// Iteratively fill two hash sets: `obj`'s children present in `repo` but missing from `self`
+    /// (`push_todo`), and `obj`'s children recognized as submodule tips. (`submodules`).
     pub fn enumerate_for_push(
         &self,
         obj: &Object,
-        for_push_state: &mut HashSet<Oid>,
-        submodule_state: &mut HashSet<Oid>,
+        push_todo: &mut HashSet<Oid>,
+        submodules: &mut HashSet<Oid>,
         repo: &Repository,
-        ipfs: &mut IpfsClient,
     ) -> Result<(), Error> {
-        if self.objects.contains_key(&obj.id().to_string()) {
-            trace!("Object {} already in nip index", obj.id());
-            return Ok(());
-        }
+        // Object tree traversal state
+        let mut stack = vec![obj.clone()];
 
-        if for_push_state.contains(&obj.id()) {
-            trace!("Object {} already in state", obj.id());
-            return Ok(());
-        }
-
-        let obj_type = obj.kind().ok_or_else(|| {
-            let msg = format!("Cannot determine type of object {}", obj.id());
-            error!("{}", msg);
-            format_err!("{}", msg)
-        })?;
-
-        for_push_state.insert(obj.id());
-
-        match obj_type {
-            ObjectType::Commit => {
-                let commit = obj
-                    .as_commit()
-                    .ok_or_else(|| format_err!("Could not view {:?} as a commit", obj))?;
-                debug!("Counting commit {:?}", commit);
-
-                let tree_obj = obj.peel(ObjectType::Tree)?;
-                trace!("Commit {}: Handling tree {}", commit.id(), tree_obj.id());
-
-                &self.enumerate_for_push(&tree_obj, for_push_state, submodule_state, repo, ipfs)?;
-
-                for parent in commit.parents() {
-                    trace!(
-                        "Commit {}: Handling parent commit {}",
-                        commit.id(),
-                        parent.id()
-                    );
-                    &self.enumerate_for_push(
-                        &parent.into_object(),
-                        for_push_state,
-                        submodule_state,
-                        repo,
-                        ipfs,
-                    )?;
-                }
-
-                Ok(())
+        let mut obj_cnt = 1;
+        while let Some(obj) = stack.pop() {
+            if self.objects.contains_key(&obj.id().to_string()) {
+                trace!("Object {} already in nip index", obj.id());
+                continue;
             }
-            ObjectType::Tree => {
-                let tree = obj
-                    .as_tree()
-                    .ok_or_else(|| format_err!("Could not view {:?} as a tree", obj))?;
-                debug!("Counting tree {:?}", tree);
 
-                for entry in tree.into_iter() {
-                    trace!(
-                        "Tree {}: Handling tree entry {} ({:?})",
-                        tree.id(),
-                        entry.id(),
-                        entry.kind()
-                    );
+            if push_todo.contains(&obj.id()) {
+                trace!("Object {} already in state", obj.id());
+                continue;
+            }
 
-                    // Weed out submodules (Implicitly known as commit children of tree objects)
-                    if let Some(ObjectType::Commit) = entry.kind() {
-                        debug!("Skipping submodule at {}", entry.id());
+            let obj_type = obj.kind().ok_or_else(|| {
+                let msg = format!("Cannot determine type of object {}", obj.id());
+                error!("{}", msg);
+                format_err!("{}", msg)
+            })?;
 
-                        submodule_state.insert(entry.id());
+            push_todo.insert(obj.id());
 
-                        continue;
+            match obj_type {
+                ObjectType::Commit => {
+                    let commit = obj
+                        .as_commit()
+                        .ok_or_else(|| format_err!("Could not view {:?} as a commit", obj))?;
+                    debug!("[{}] Counting commit {:?}", obj_cnt, commit);
+
+                    let tree_obj = obj.peel(ObjectType::Tree)?;
+                    trace!("Commit {}: Handling tree {}", commit.id(), tree_obj.id());
+
+                    stack.push(tree_obj);
+
+                    for parent in commit.parents() {
+                        trace!(
+                            "Commit {}: Pushing parent commit {}",
+                            commit.id(),
+                            parent.id()
+                        );
+                        stack.push(parent.into_object());
                     }
-
-                    &self.enumerate_for_push(
-                        &entry.to_object(&repo)?,
-                        for_push_state,
-                        submodule_state,
-                        repo,
-                        ipfs,
-                    )?;
                 }
+                ObjectType::Tree => {
+                    let tree = obj
+                        .as_tree()
+                        .ok_or_else(|| format_err!("Could not view {:?} as a tree", obj))?;
+                    debug!("[{}] Counting tree {:?}", obj_cnt, tree);
 
-                Ok(())
-            }
-            ObjectType::Blob => {
-                let blob = obj
-                    .as_blob()
-                    .ok_or_else(|| format_err!("Could not view {:?} as a blob", obj))?;
-                debug!("Counting blob {:?}", blob);
+                    for entry in tree.into_iter() {
+                        // Weed out submodules (Implicitly known as commit children of tree objects)
+                        if let Some(ObjectType::Commit) = entry.kind() {
+                            debug!("Skipping submodule at {}", entry.id());
 
-                Ok(())
-            }
-            ObjectType::Tag => {
-                let tag = obj
-                    .as_tag()
-                    .ok_or_else(|| format_err!("Could not view {:?} as a tag", obj))?;
-                debug!("Counting tag {:?}", tag);
+                            submodules.insert(entry.id());
 
-                &self.enumerate_for_push(
-                    &tag.target()?,
-                    for_push_state,
-                    submodule_state,
-                    repo,
-                    ipfs,
-                )?;
+                            continue;
+                        }
 
-                Ok(())
+                        trace!(
+                            "Tree {}: Pushing tree entry {} ({:?})",
+                            tree.id(),
+                            entry.id(),
+                            entry.kind()
+                        );
+
+                        stack.push(entry.to_object(&repo)?);
+                    }
+                }
+                ObjectType::Blob => {
+                    let blob = obj
+                        .as_blob()
+                        .ok_or_else(|| format_err!("Could not view {:?} as a blob", obj))?;
+                    debug!("[{}] Counting blob {:?}", obj_cnt, blob);
+                }
+                ObjectType::Tag => {
+                    let tag = obj
+                        .as_tag()
+                        .ok_or_else(|| format_err!("Could not view {:?} as a tag", obj))?;
+                    debug!("[{}] Counting tag {:?}", obj_cnt, tag);
+
+                    stack.push(tag.target()?);
+                }
+                other => {
+                    return Err(NIPError::InternalError(format!(
+                        "Don't know how to traverse a {}",
+                        other
+                    ))
+                    .into());
+                }
             }
-            other => {
-                return Err(NIPError::InternalError(format!(
-                    "Don't know how to traverse a {}",
-                    other
-                ))
-                .into());
-            }
+
+            obj_cnt += 1;
         }
+        Ok(())
     }
 
     /// Take `oids` and upload underlying `repo` git objects to IPFS. for `submodules` the
@@ -468,88 +461,73 @@ impl NIPIndex {
     pub fn enumerate_for_fetch(
         &self,
         oid: Oid,
-        for_fetch_state: &mut HashSet<Oid>,
+        fetch_todo: &mut HashSet<Oid>,
         repo: &Repository,
         ipfs: &mut IpfsClient,
     ) -> Result<(), Error> {
-        if repo.odb()?.read_header(oid).is_ok() {
-            trace!("Object {} already present locally!", oid);
-            return Ok(());
-        }
+        let mut stack = vec![oid];
+        let mut obj_cnt = 1;
 
-        if for_fetch_state.contains(&oid) {
-            trace!("Object {} already present in state!", oid);
-            return Ok(());
-        }
+        while let Some(oid) = stack.pop() {
+            if repo.odb()?.read_header(oid).is_ok() {
+                trace!("Object {} already present locally!", oid);
+                continue;
+            }
 
-        let nip_obj_ipfs_hash = self
-            .objects
-            .get(&format!("{}", oid))
-            .ok_or_else(|| {
-                let msg = format!("Could not find object {} in the index", oid);
-                error!("{}", msg);
-                format_err!("{}", msg)
-            })?
-            .clone();
+            if fetch_todo.contains(&oid) {
+                trace!("Object {} already present in state!", oid);
+                continue;
+            }
 
-        if nip_obj_ipfs_hash == SUBMODULE_TIP_MARKER {
-            debug!("Ommitting submodule {}", oid.to_string());
-            return Ok(());
-        }
+            let nip_obj_ipfs_hash = self
+                .objects
+                .get(&format!("{}", oid))
+                .ok_or_else(|| {
+                    let msg = format!("Could not find object {} in the index", oid);
+                    error!("{}", msg);
+                    format_err!("{}", msg)
+                })?
+                .clone();
 
-        // Inserting only makes sense after we knowthat the object is there at all
-        for_fetch_state.insert(oid);
+            if nip_obj_ipfs_hash == SUBMODULE_TIP_MARKER {
+                debug!("Ommitting submodule {}", oid.to_string());
+                return Ok(());
+            }
 
-        let nip_obj = NIPObject::ipfs_get(&nip_obj_ipfs_hash, ipfs)?;
+            fetch_todo.insert(oid);
 
-        match nip_obj.clone().metadata {
-            NIPObjectMetadata::Commit {
-                parent_git_hashes,
-                tree_git_hash,
-            } => {
-                debug!("Counting nip commit {}", nip_obj_ipfs_hash);
+            let nip_obj = NIPObject::ipfs_get(&nip_obj_ipfs_hash, ipfs)?;
 
-                &self.enumerate_for_fetch(
-                    Oid::from_str(&tree_git_hash)?,
-                    for_fetch_state,
-                    repo,
-                    ipfs,
-                )?;
+            match nip_obj.clone().metadata {
+                NIPObjectMetadata::Commit {
+                    parent_git_hashes,
+                    tree_git_hash,
+                } => {
+                    debug!("[{}] Counting nip commit {}", obj_cnt, nip_obj_ipfs_hash);
 
-                for parent_git_hash in parent_git_hashes {
-                    &self.enumerate_for_fetch(
-                        Oid::from_str(&parent_git_hash)?,
-                        for_fetch_state,
-                        repo,
-                        ipfs,
-                    )?;
+                    stack.push(Oid::from_str(&tree_git_hash)?);
+
+                    for parent_git_hash in parent_git_hashes {
+                        stack.push(Oid::from_str(&parent_git_hash)?);
+                    }
+                }
+                NIPObjectMetadata::Tag { target_git_hash } => {
+                    debug!("[{}] Counting nip tag {}", obj_cnt, nip_obj_ipfs_hash);
+
+                    stack.push(Oid::from_str(&target_git_hash)?);
+                }
+                NIPObjectMetadata::Tree { entry_git_hashes } => {
+                    debug!("[{}] Counting nip tree {}", obj_cnt, nip_obj_ipfs_hash);
+
+                    for entry_git_hash in entry_git_hashes {
+                        stack.push(Oid::from_str(&entry_git_hash)?);
+                    }
+                }
+                NIPObjectMetadata::Blob => {
+                    debug!("[{}] Counting nip blob {}", obj_cnt, nip_obj_ipfs_hash);
                 }
             }
-            NIPObjectMetadata::Tag { target_git_hash } => {
-                debug!("Counting nip tag {}", nip_obj_ipfs_hash);
-
-                &self.enumerate_for_fetch(
-                    Oid::from_str(&target_git_hash)?,
-                    for_fetch_state,
-                    repo,
-                    ipfs,
-                )?;
-            }
-            NIPObjectMetadata::Tree { entry_git_hashes } => {
-                trace!("Counting nip tree {}", nip_obj_ipfs_hash);
-
-                for entry_git_hash in entry_git_hashes {
-                    &self.enumerate_for_fetch(
-                        Oid::from_str(&entry_git_hash)?,
-                        for_fetch_state,
-                        repo,
-                        ipfs,
-                    )?;
-                }
-            }
-            NIPObjectMetadata::Blob => {
-                trace!("Counting nip blob {}", nip_obj_ipfs_hash);
-            }
+            obj_cnt += 1;
         }
 
         Ok(())
