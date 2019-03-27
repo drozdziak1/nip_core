@@ -161,16 +161,18 @@ impl NIPIndex {
             &mut submodules_for_push,
             repo,
         )?;
-        let dur = Instant::now().duration_since(start);
+        let dur = start.elapsed();
 
         debug!(
-            "Counted objects in {}.{}s",
+            "Counting objects took {}.{}s",
             dur.as_secs(),
             dur.subsec_micros()
         );
 
         debug!(
-            "Counted {} object(s) for push:\n{:#?}",
+            "Counted {} object(s) for push (took {}.{}):\n{:#?}",
+            dur.as_secs(),
+            dur.subsec_micros(),
             objs_for_push.len(),
             objs_for_push
         );
@@ -426,7 +428,15 @@ impl NIPIndex {
 
         let git_hash_oid = Oid::from_str(git_hash)?;
         let mut oids_for_fetch = HashSet::new();
+
+        let start = Instant::now();
         self.enumerate_for_fetch(git_hash_oid, &mut oids_for_fetch, repo, ipfs)?;
+        let dur = start.elapsed();
+        debug!(
+            "Counting objects took {}.{}s",
+            dur.as_secs(),
+            dur.subsec_micros()
+        );
         debug!(
             "Counted {} object(s) for fetch:\n{:#?}",
             oids_for_fetch.len(),
